@@ -188,15 +188,6 @@ internal sealed class UBDocGuiForm : Form
         e.Result = ConvertDocument(config, worker);
     }
 
-    public ConversionResult ConvertForCommandLine(string viewerUrl, string outputDir, bool keepImages)
-    {
-        RunConfig config = new RunConfig();
-        config.ViewerUrl = viewerUrl;
-        config.OutputDir = outputDir;
-        config.KeepImages = keepImages;
-        return ConvertDocument(config, null);
-    }
-
     private ConversionResult ConvertDocument(RunConfig config, BackgroundWorker worker)
     {
         Dictionary<string, object> state = CheckState(config.ViewerUrl);
@@ -909,41 +900,6 @@ internal static class Program
         if (args.Length > 0 && args[0] == "--self-test")
         {
             return 0;
-        }
-        if (args.Length > 0 && (args[0] == "--convert-default" || args[0] == "--convert"))
-        {
-            string scriptDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string viewerUrl = "https://tls.kku.ac.kr/local/ubdoc/?id=756993&tp=m&pg=ubfile";
-            string outputDir = Path.Combine(scriptDir, "PDF");
-            bool keepImages = false;
-
-            if (args[0] == "--convert")
-            {
-                if (args.Length < 3)
-                {
-                    return 2;
-                }
-                viewerUrl = args[1];
-                outputDir = args[2];
-                for (int i = 3; i < args.Length; i++)
-                {
-                    if (args[i] == "--keep-images")
-                    {
-                        keepImages = true;
-                    }
-                }
-            }
-
-            try
-            {
-                UBDocGuiForm form = new UBDocGuiForm();
-                form.ConvertForCommandLine(viewerUrl, outputDir, keepImages);
-                return 0;
-            }
-            catch
-            {
-                return 1;
-            }
         }
 
         Application.EnableVisualStyles();
