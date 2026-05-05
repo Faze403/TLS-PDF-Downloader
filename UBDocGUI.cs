@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -13,8 +15,571 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Xml.Linq;
 
+internal static class UiTheme
+{
+    public static readonly Color AppBack = Color.FromArgb(8, 9, 10);
+    public static readonly Color PanelBack = Color.FromArgb(15, 16, 17);
+    public static readonly Color SurfaceBack = Color.FromArgb(25, 26, 27);
+    public static readonly Color InputBack = Color.FromArgb(18, 19, 21);
+    public static readonly Color DisabledBack = Color.FromArgb(24, 25, 27);
+    public static readonly Color PrimaryText = Color.FromArgb(247, 248, 248);
+    public static readonly Color SecondaryText = Color.FromArgb(208, 214, 224);
+    public static readonly Color MutedText = Color.FromArgb(138, 143, 152);
+    public static readonly Color DisabledText = Color.FromArgb(98, 102, 109);
+    public static readonly Color Accent = Color.FromArgb(94, 106, 210);
+    public static readonly Color AccentHover = Color.FromArgb(113, 112, 255);
+    public static readonly Color AccentPressed = Color.FromArgb(79, 88, 184);
+    public static readonly Color BorderSubtle = Color.FromArgb(13, 255, 255, 255);
+    public static readonly Color BorderStandard = Color.FromArgb(20, 255, 255, 255);
+    public static readonly Color GhostFill = Color.FromArgb(10, 255, 255, 255);
+    public static readonly Color GhostHover = Color.FromArgb(18, 255, 255, 255);
+    public static readonly Color GhostPressed = Color.FromArgb(25, 255, 255, 255);
+
+    private static readonly string UiFontName = ResolveFontName(new string[] { "Inter", "Segoe UI Variable Display", "Segoe UI" });
+    private static readonly string MonoFontName = ResolveFontName(new string[] { "Berkeley Mono", "Cascadia Mono", "Consolas" });
+
+    public static Font Font(float size, FontStyle style)
+    {
+        return new Font(UiFontName, size, style, GraphicsUnit.Point);
+    }
+
+    public static Font MonoFont(float size, FontStyle style)
+    {
+        return new Font(MonoFontName, size, style, GraphicsUnit.Point);
+    }
+
+    public static GraphicsPath CreateRoundedRectangle(Rectangle bounds, int radius)
+    {
+        GraphicsPath path = new GraphicsPath();
+        int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+        if (diameter <= 1)
+        {
+            path.AddRectangle(bounds);
+            return path;
+        }
+
+        Rectangle arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
+        path.AddArc(arc, 180, 90);
+        arc.X = bounds.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = bounds.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = bounds.Left;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static string ResolveFontName(string[] names)
+    {
+        try
+        {
+            using (InstalledFontCollection fonts = new InstalledFontCollection())
+            {
+                foreach (string name in names)
+                {
+                    foreach (FontFamily family in fonts.Families)
+                    {
+                        if (string.Equals(family.Name, name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return family.Name;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+        return names[names.Length - 1];
+    }
+}
+
+internal sealed class LinearSurfacePanel : Panel
+{
+    private Color fillColor = UiTheme.PanelBack;
+    private Color borderColor = UiTheme.BorderStandard;
+    private int radius = 8;
+
+    public LinearSurfacePanel()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        BackColor = fillColor;
+    }
+
+    public Color FillColor
+    {
+        get { return fillColor; }
+        set
+        {
+            fillColor = value;
+            BackColor = value;
+            Invalidate();
+        }
+    }
+
+    public Color BorderColor
+    {
+        get { return borderColor; }
+        set
+        {
+            borderColor = value;
+            Invalidate();
+        }
+    }
+
+    public int Radius
+    {
+        get { return radius; }
+        set
+        {
+            radius = Math.Max(0, value);
+            Invalidate();
+        }
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent == null ? UiTheme.AppBack : Parent.BackColor);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+        using (GraphicsPath path = UiTheme.CreateRoundedRectangle(rect, radius))
+        using (SolidBrush brush = new SolidBrush(fillColor))
+        using (Pen pen = new Pen(borderColor))
+        {
+            e.Graphics.FillPath(brush, path);
+            e.Graphics.DrawPath(pen, path);
+        }
+    }
+}
+
+internal sealed class LinearButton : Button
+{
+    private bool mouseOver;
+    private bool mouseDown;
+
+    public Color FillColor = UiTheme.GhostFill;
+    public Color HoverColor = UiTheme.GhostHover;
+    public Color PressedColor = UiTheme.GhostPressed;
+    public Color BorderColor = UiTheme.BorderStandard;
+    public Color TextColor = UiTheme.SecondaryText;
+    public int Radius = 6;
+
+    public LinearButton()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        UseVisualStyleBackColor = false;
+        BackColor = UiTheme.PanelBack;
+        ForeColor = TextColor;
+        Cursor = Cursors.Hand;
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        mouseOver = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        mouseOver = false;
+        mouseDown = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        mouseDown = true;
+        Invalidate();
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        mouseDown = false;
+        Invalidate();
+        base.OnMouseUp(e);
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent == null ? UiTheme.AppBack : Parent.BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        Color fill = Enabled ? (mouseDown ? PressedColor : (mouseOver ? HoverColor : FillColor)) : UiTheme.DisabledBack;
+        Color border = Enabled ? BorderColor : UiTheme.BorderSubtle;
+        Color text = Enabled ? TextColor : UiTheme.DisabledText;
+        Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+
+        using (GraphicsPath path = UiTheme.CreateRoundedRectangle(rect, Radius))
+        using (SolidBrush brush = new SolidBrush(fill))
+        using (Pen pen = new Pen(border))
+        {
+            e.Graphics.FillPath(brush, path);
+            e.Graphics.DrawPath(pen, path);
+        }
+
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            Font,
+            ClientRectangle,
+            text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+}
+
+internal sealed class LinearCheckBox : CheckBox
+{
+    private bool mouseOver;
+
+    public LinearCheckBox()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        AutoSize = false;
+        Font = UiTheme.Font(9F, FontStyle.Regular);
+        ForeColor = UiTheme.SecondaryText;
+        BackColor = UiTheme.PanelBack;
+        Cursor = Cursors.Hand;
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        mouseOver = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        mouseOver = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Cursor = Enabled ? Cursors.Hand : Cursors.Default;
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
+    protected override void OnCheckedChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnCheckedChanged(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent == null ? UiTheme.AppBack : Parent.BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        int boxSize = 18;
+        Rectangle boxRect = new Rectangle(0, (Height - boxSize) / 2, boxSize, boxSize);
+        Color fill = Checked ? UiTheme.Accent : (mouseOver ? UiTheme.SurfaceBack : UiTheme.InputBack);
+        Color border = Checked ? UiTheme.AccentHover : UiTheme.BorderStandard;
+        Color text = Enabled ? UiTheme.SecondaryText : UiTheme.DisabledText;
+
+        if (!Enabled)
+        {
+            fill = UiTheme.DisabledBack;
+            border = UiTheme.BorderSubtle;
+        }
+
+        using (GraphicsPath path = UiTheme.CreateRoundedRectangle(boxRect, 4))
+        using (SolidBrush brush = new SolidBrush(fill))
+        using (Pen pen = new Pen(border))
+        {
+            e.Graphics.FillPath(brush, path);
+            e.Graphics.DrawPath(pen, path);
+        }
+
+        if (Checked)
+        {
+            using (Pen checkPen = new Pen(UiTheme.PrimaryText, 2F))
+            {
+                checkPen.StartCap = LineCap.Round;
+                checkPen.EndCap = LineCap.Round;
+                e.Graphics.DrawLines(checkPen, new Point[] {
+                    new Point(5, boxRect.Top + 9),
+                    new Point(8, boxRect.Top + 12),
+                    new Point(13, boxRect.Top + 6)
+                });
+            }
+        }
+
+        Rectangle textRect = new Rectangle(28, 0, Width - 28, Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            Font,
+            textRect,
+            text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+}
+
+internal sealed class NaturalLogTextBox : TextBox
+{
+    public event MouseEventHandler WheelRequested;
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        if (WheelRequested != null)
+        {
+            WheelRequested(this, e);
+            return;
+        }
+
+        base.OnMouseWheel(e);
+    }
+}
+
+internal sealed class LinearScrollBar : Control
+{
+    private int maximum;
+    private int largeChange = 1;
+    private int value;
+    private bool mouseOver;
+    private bool dragging;
+    private int dragStartY;
+    private int dragStartValue;
+
+    public event EventHandler ValueChanged;
+
+    public LinearScrollBar()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        TabStop = false;
+        Cursor = Cursors.Hand;
+        BackColor = UiTheme.InputBack;
+    }
+
+    public int Maximum
+    {
+        get { return maximum; }
+    }
+
+    public int Value
+    {
+        get { return value; }
+        set { SetValue(value, true); }
+    }
+
+    public void SetScrollValues(int newMaximum, int newLargeChange, int newValue)
+    {
+        maximum = Math.Max(0, newMaximum);
+        largeChange = Math.Max(1, newLargeChange);
+        Visible = maximum > 0;
+        SetValue(newValue, false);
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent == null ? UiTheme.InputBack : Parent.BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        Rectangle track = GetTrackRectangle();
+        using (GraphicsPath trackPath = UiTheme.CreateRoundedRectangle(track, 4))
+        using (SolidBrush trackBrush = new SolidBrush(Color.FromArgb(16, 255, 255, 255)))
+        {
+            e.Graphics.FillPath(trackBrush, trackPath);
+        }
+
+        if (maximum <= 0)
+        {
+            return;
+        }
+
+        Color thumbColor = dragging
+            ? UiTheme.AccentHover
+            : (mouseOver ? Color.FromArgb(150, UiTheme.SecondaryText) : Color.FromArgb(92, UiTheme.SecondaryText));
+
+        using (GraphicsPath thumbPath = UiTheme.CreateRoundedRectangle(GetThumbRectangle(), 4))
+        using (SolidBrush thumbBrush = new SolidBrush(thumbColor))
+        {
+            e.Graphics.FillPath(thumbBrush, thumbPath);
+        }
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        mouseOver = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        if (!dragging)
+        {
+            mouseOver = false;
+            Invalidate();
+        }
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left && maximum > 0)
+        {
+            Focus();
+            Rectangle thumb = GetThumbRectangle();
+            if (thumb.Contains(e.Location))
+            {
+                dragging = true;
+                dragStartY = e.Y;
+                dragStartValue = value;
+                Capture = true;
+            }
+            else
+            {
+                Value = value + (e.Y < thumb.Top ? -largeChange : largeChange);
+            }
+            Invalidate();
+        }
+
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (dragging && maximum > 0)
+        {
+            Rectangle track = GetTrackRectangle();
+            Rectangle thumb = GetThumbRectangle();
+            int travel = Math.Max(1, track.Height - thumb.Height);
+            int delta = (int)Math.Round((e.Y - dragStartY) * (maximum / (double)travel));
+            Value = dragStartValue + delta;
+        }
+
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (dragging)
+        {
+            dragging = false;
+            Capture = false;
+            mouseOver = ClientRectangle.Contains(PointToClient(Cursor.Position));
+            Invalidate();
+        }
+
+        base.OnMouseUp(e);
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        int lines = SystemInformation.MouseWheelScrollLines;
+        if (lines <= 0 || lines > 20)
+        {
+            lines = 3;
+        }
+
+        int notches = e.Delta / SystemInformation.MouseWheelScrollDelta;
+        if (notches == 0)
+        {
+            notches = e.Delta > 0 ? 1 : -1;
+        }
+
+        Value = value - notches * lines;
+        base.OnMouseWheel(e);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        Invalidate();
+        base.OnResize(e);
+    }
+
+    private void SetValue(int newValue, bool raiseChanged)
+    {
+        int clamped = Math.Max(0, Math.Min(maximum, newValue));
+        if (clamped == value)
+        {
+            return;
+        }
+
+        value = clamped;
+        Invalidate();
+        if (raiseChanged && ValueChanged != null)
+        {
+            ValueChanged(this, EventArgs.Empty);
+        }
+    }
+
+    private Rectangle GetTrackRectangle()
+    {
+        int width = Math.Min(8, Math.Max(4, Width));
+        int x = (Width - width) / 2;
+        return new Rectangle(x, 2, width, Math.Max(1, Height - 4));
+    }
+
+    private Rectangle GetThumbRectangle()
+    {
+        Rectangle track = GetTrackRectangle();
+        if (maximum <= 0)
+        {
+            return track;
+        }
+
+        int total = maximum + largeChange;
+        int thumbHeight = total <= 0
+            ? track.Height
+            : (int)Math.Round(track.Height * (largeChange / (double)total));
+        thumbHeight = Math.Max(24, Math.Min(track.Height, thumbHeight));
+
+        int travel = Math.Max(0, track.Height - thumbHeight);
+        int thumbTop = track.Top;
+        if (maximum > 0 && travel > 0)
+        {
+            thumbTop += (int)Math.Round(travel * (value / (double)maximum));
+        }
+
+        return new Rectangle(track.Left, thumbTop, track.Width, thumbHeight);
+    }
+}
+
 internal sealed class UBDocGuiForm : Form
 {
+    private const int EM_LINESCROLL = 0x00B6;
+    private const int EM_GETLINECOUNT = 0x00BA;
+    private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    private const int DWMWA_BORDER_COLOR = 34;
+    private const int DWMWA_CAPTION_COLOR = 35;
+    private const int DWMWA_TEXT_COLOR = 36;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
     private readonly string appDir;
     private readonly string defaultOutput;
     private readonly string logDir;
@@ -24,10 +589,14 @@ internal sealed class UBDocGuiForm : Form
 
     private TextBox urlBox;
     private TextBox outputBox;
-    private TextBox logBox;
+    private NaturalLogTextBox logBox;
+    private LinearScrollBar logScrollBar;
     private Button browseButton;
     private Button runButton;
     private CheckBox keepImagesBox;
+    private LinearSurfacePanel urlInputPanel;
+    private LinearSurfacePanel outputInputPanel;
+    private bool updatingLogScrollBar;
 
     private readonly StringBuilder stdoutBuffer = new StringBuilder();
     private readonly StringBuilder stderrBuffer = new StringBuilder();
@@ -48,72 +617,380 @@ internal sealed class UBDocGuiForm : Form
         InitializeComponent();
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyNativeTitleBarTheme();
+    }
+
     private void InitializeComponent()
     {
-        Text = "KKU ubdoc PDF 저장";
+        Text = "TLS PDF Downloader";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(720, 430);
-        MinimumSize = new Size(640, 390);
-        Font = new Font("Malgun Gothic", 9F);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MinimizeBox = true;
+        MaximizeBox = true;
+        ControlBox = true;
+        ClientSize = new Size(780, 560);
+        MinimumSize = new Size(720, 520);
+        BackColor = UiTheme.AppBack;
+        ForeColor = UiTheme.PrimaryText;
+        Font = UiTheme.Font(9F, FontStyle.Regular);
+        DoubleBuffered = true;
 
-        Label urlLabel = new Label();
-        urlLabel.Text = "ubdoc URL";
-        urlLabel.AutoSize = true;
-        urlLabel.Location = new Point(16, 18);
+        Icon loadedIcon = LoadApplicationIcon();
+        if (loadedIcon != null)
+        {
+            Icon = loadedIcon;
+        }
 
-        urlBox = new TextBox();
+        LinearSurfacePanel toolPanel = new LinearSurfacePanel();
+        toolPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        toolPanel.Location = new Point(24, 22);
+        toolPanel.Size = new Size(ClientSize.Width - 48, 228);
+        toolPanel.FillColor = UiTheme.PanelBack;
+        toolPanel.BorderColor = UiTheme.BorderStandard;
+        toolPanel.Radius = 12;
+
+        Label panelTitle = CreateLabel("문서 변환", 24, 20, 220, 24, UiTheme.Font(10F, FontStyle.Regular), UiTheme.PrimaryText);
+        Label urlLabel = CreateLabel("ubdoc URL", 24, 56, 160, 22, UiTheme.Font(8.5F, FontStyle.Regular), UiTheme.SecondaryText);
+
+        urlInputPanel = CreateInputPanel(24, 80, toolPanel.Width - 48, 38);
+        urlInputPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+        urlBox = CreateInputBox("");
+        urlBox.Location = new Point(13, 10);
+        urlBox.Size = new Size(urlInputPanel.Width - 26, 18);
         urlBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        urlBox.Location = new Point(16, 42);
-        urlBox.Size = new Size(670, 25);
         urlBox.Text = "";
+        urlInputPanel.Controls.Add(urlBox);
 
-        Label outputLabel = new Label();
-        outputLabel.Text = "PDF 저장 폴더";
-        outputLabel.AutoSize = true;
-        outputLabel.Location = new Point(16, 82);
+        Label outputLabel = CreateLabel("PDF 저장 폴더", 24, 130, 180, 22, UiTheme.Font(8.5F, FontStyle.Regular), UiTheme.SecondaryText);
 
-        outputBox = new TextBox();
+        outputInputPanel = CreateInputPanel(24, 154, toolPanel.Width - 292, 38);
+        outputInputPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+        outputBox = CreateInputBox(LoadLastOutputDir());
+        outputBox.Location = new Point(13, 10);
+        outputBox.Size = new Size(outputInputPanel.Width - 26, 18);
         outputBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        outputBox.Location = new Point(16, 106);
-        outputBox.Size = new Size(560, 25);
         outputBox.Text = LoadLastOutputDir();
+        outputInputPanel.Controls.Add(outputBox);
 
-        browseButton = new Button();
+        browseButton = new LinearButton();
         browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        browseButton.Location = new Point(590, 104);
-        browseButton.Size = new Size(96, 29);
+        browseButton.Location = new Point(toolPanel.Width - 262, 154);
+        browseButton.Size = new Size(96, 38);
         browseButton.Text = "찾기";
+        browseButton.Font = UiTheme.Font(9F, FontStyle.Regular);
         browseButton.Click += BrowseButton_Click;
 
-        keepImagesBox = new CheckBox();
-        keepImagesBox.Location = new Point(16, 146);
-        keepImagesBox.Size = new Size(220, 24);
+        keepImagesBox = new LinearCheckBox();
+        keepImagesBox.Location = new Point(24, 196);
+        keepImagesBox.Size = new Size(240, 24);
         keepImagesBox.Text = "PNG 이미지 남기기";
         keepImagesBox.Checked = false;
 
-        runButton = new Button();
+        runButton = new LinearButton();
         runButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        runButton.Location = new Point(556, 142);
-        runButton.Size = new Size(130, 32);
+        runButton.Location = new Point(toolPanel.Width - 154, 154);
+        runButton.Size = new Size(130, 38);
         runButton.Text = "PDF 저장";
+        runButton.Font = UiTheme.Font(9F, FontStyle.Regular);
+        ((LinearButton)runButton).FillColor = UiTheme.Accent;
+        ((LinearButton)runButton).HoverColor = UiTheme.AccentHover;
+        ((LinearButton)runButton).PressedColor = UiTheme.AccentPressed;
+        ((LinearButton)runButton).BorderColor = UiTheme.Accent;
+        ((LinearButton)runButton).TextColor = UiTheme.PrimaryText;
         runButton.Click += RunButton_Click;
 
-        logBox = new TextBox();
-        logBox.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-        logBox.Location = new Point(16, 188);
-        logBox.Size = new Size(670, 185);
-        logBox.Multiline = true;
-        logBox.ScrollBars = ScrollBars.Vertical;
-        logBox.ReadOnly = true;
+        toolPanel.Controls.Add(panelTitle);
+        toolPanel.Controls.Add(urlLabel);
+        toolPanel.Controls.Add(urlInputPanel);
+        toolPanel.Controls.Add(outputLabel);
+        toolPanel.Controls.Add(outputInputPanel);
+        toolPanel.Controls.Add(browseButton);
+        toolPanel.Controls.Add(keepImagesBox);
+        toolPanel.Controls.Add(runButton);
 
-        Controls.Add(urlLabel);
-        Controls.Add(urlBox);
-        Controls.Add(outputLabel);
-        Controls.Add(outputBox);
-        Controls.Add(browseButton);
-        Controls.Add(keepImagesBox);
-        Controls.Add(runButton);
-        Controls.Add(logBox);
+        LinearSurfacePanel logPanel = new LinearSurfacePanel();
+        logPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        logPanel.Location = new Point(24, 266);
+        logPanel.Size = new Size(ClientSize.Width - 48, ClientSize.Height - 290);
+        logPanel.FillColor = UiTheme.PanelBack;
+        logPanel.BorderColor = UiTheme.BorderStandard;
+        logPanel.Radius = 12;
+
+        Label logTitle = CreateLabel("진행 로그", 24, 18, 200, 24, UiTheme.Font(10F, FontStyle.Regular), UiTheme.PrimaryText);
+
+        LinearSurfacePanel logInputPanel = CreateInputPanel(24, 50, logPanel.Width - 48, logPanel.Height - 74);
+        logInputPanel.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
+        logBox = CreateLogBox();
+        logBox.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        logBox.Location = new Point(13, 12);
+        logBox.Size = new Size(logInputPanel.Width - 44, logInputPanel.Height - 24);
+        logBox.WheelRequested += LogBox_WheelRequested;
+        logBox.TextChanged += LogBox_ViewportChanged;
+        logBox.Resize += LogBox_ViewportChanged;
+        logBox.HandleCreated += LogBox_ViewportChanged;
+        logBox.KeyUp += LogBox_KeyUp;
+        logBox.MouseUp += LogBox_MouseUp;
+        logInputPanel.Controls.Add(logBox);
+
+        logScrollBar = new LinearScrollBar();
+        logScrollBar.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right;
+        logScrollBar.Location = new Point(logInputPanel.Width - 22, 12);
+        logScrollBar.Size = new Size(10, logInputPanel.Height - 24);
+        logScrollBar.Visible = false;
+        logScrollBar.ValueChanged += LogScrollBar_ValueChanged;
+        logInputPanel.Controls.Add(logScrollBar);
+        UpdateLogScrollBar();
+
+        logPanel.Controls.Add(logTitle);
+        logPanel.Controls.Add(logInputPanel);
+
+        Controls.Add(toolPanel);
+        Controls.Add(logPanel);
+    }
+
+    private static Label CreateLabel(string text, int x, int y, int width, int height, Font font, Color color)
+    {
+        Label label = new Label();
+        label.Text = text;
+        label.Location = new Point(x, y);
+        label.Size = new Size(width, height);
+        label.Font = font;
+        label.ForeColor = color;
+        label.BackColor = Color.Transparent;
+        label.AutoEllipsis = true;
+        label.UseMnemonic = false;
+        return label;
+    }
+
+    private static LinearSurfacePanel CreateInputPanel(int x, int y, int width, int height)
+    {
+        LinearSurfacePanel panel = new LinearSurfacePanel();
+        panel.Location = new Point(x, y);
+        panel.Size = new Size(width, height);
+        panel.FillColor = UiTheme.InputBack;
+        panel.BorderColor = UiTheme.BorderStandard;
+        panel.Radius = 6;
+        return panel;
+    }
+
+    private static TextBox CreateInputBox(string text)
+    {
+        TextBox box = new TextBox();
+        box.BorderStyle = BorderStyle.None;
+        box.BackColor = UiTheme.InputBack;
+        box.ForeColor = UiTheme.SecondaryText;
+        box.Font = UiTheme.Font(9F, FontStyle.Regular);
+        box.Text = text;
+        return box;
+    }
+
+    private static NaturalLogTextBox CreateLogBox()
+    {
+        NaturalLogTextBox box = new NaturalLogTextBox();
+        box.BorderStyle = BorderStyle.None;
+        box.BackColor = UiTheme.InputBack;
+        box.ForeColor = UiTheme.SecondaryText;
+        box.Font = UiTheme.MonoFont(8.5F, FontStyle.Regular);
+        box.Multiline = true;
+        box.ReadOnly = true;
+        box.ScrollBars = ScrollBars.None;
+        box.ShortcutsEnabled = true;
+        return box;
+    }
+
+    private Icon LoadApplicationIcon()
+    {
+        string iconPath = Path.Combine(appDir, "Assets", "TlsPdfDownloader.ico");
+        try
+        {
+            if (File.Exists(iconPath))
+            {
+                return new Icon(iconPath);
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            return Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        }
+        catch
+        {
+            return SystemIcons.Application;
+        }
+    }
+
+    private void ApplyNativeTitleBarTheme()
+    {
+        if (!IsHandleCreated)
+        {
+            return;
+        }
+
+        int enabled = 1;
+        TrySetDwmAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE, enabled);
+        TrySetDwmAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, enabled);
+
+        TrySetDwmAttribute(DWMWA_CAPTION_COLOR, ColorTranslator.ToWin32(UiTheme.AppBack));
+        TrySetDwmAttribute(DWMWA_TEXT_COLOR, ColorTranslator.ToWin32(UiTheme.PrimaryText));
+        TrySetDwmAttribute(DWMWA_BORDER_COLOR, ColorTranslator.ToWin32(UiTheme.AppBack));
+    }
+
+    private void TrySetDwmAttribute(int attribute, int value)
+    {
+        try
+        {
+            DwmSetWindowAttribute(Handle, attribute, ref value, sizeof(int));
+        }
+        catch
+        {
+        }
+    }
+
+    private void LogBox_WheelRequested(object sender, MouseEventArgs e)
+    {
+        int lines = SystemInformation.MouseWheelScrollLines;
+        if (lines <= 0 || lines > 20)
+        {
+            lines = 3;
+        }
+
+        int notches = e.Delta / SystemInformation.MouseWheelScrollDelta;
+        if (notches == 0)
+        {
+            notches = e.Delta > 0 ? 1 : -1;
+        }
+
+        ScrollLogToLine(GetFirstVisibleLogLine() - notches * lines);
+    }
+
+    private void LogScrollBar_ValueChanged(object sender, EventArgs e)
+    {
+        if (updatingLogScrollBar)
+        {
+            return;
+        }
+
+        ScrollLogToLine(logScrollBar.Value);
+    }
+
+    private void LogBox_ViewportChanged(object sender, EventArgs e)
+    {
+        QueueLogScrollBarUpdate();
+    }
+
+    private void LogBox_KeyUp(object sender, KeyEventArgs e)
+    {
+        QueueLogScrollBarUpdate();
+    }
+
+    private void LogBox_MouseUp(object sender, MouseEventArgs e)
+    {
+        QueueLogScrollBarUpdate();
+    }
+
+    private void QueueLogScrollBarUpdate()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (!IsHandleCreated)
+        {
+            UpdateLogScrollBar();
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new MethodInvoker(UpdateLogScrollBar));
+        }
+        catch
+        {
+            UpdateLogScrollBar();
+        }
+    }
+
+    private void ScrollLogToLine(int targetLine)
+    {
+        if (logBox == null || logBox.IsDisposed || !logBox.IsHandleCreated)
+        {
+            return;
+        }
+
+        int maximum = Math.Max(0, GetLogLineCount() - GetVisibleLogLineCount());
+        targetLine = Math.Max(0, Math.Min(maximum, targetLine));
+
+        int currentLine = GetFirstVisibleLogLine();
+        int delta = targetLine - currentLine;
+        if (delta != 0)
+        {
+            SendMessage(logBox.Handle, EM_LINESCROLL, IntPtr.Zero, new IntPtr(delta));
+        }
+
+        UpdateLogScrollBar();
+    }
+
+    private void UpdateLogScrollBar()
+    {
+        if (logBox == null || logScrollBar == null || logBox.IsDisposed || !logBox.IsHandleCreated)
+        {
+            return;
+        }
+
+        int visibleLines = GetVisibleLogLineCount();
+        int maximum = Math.Max(0, GetLogLineCount() - visibleLines);
+        int value = Math.Max(0, Math.Min(maximum, GetFirstVisibleLogLine()));
+
+        updatingLogScrollBar = true;
+        try
+        {
+            logScrollBar.SetScrollValues(maximum, visibleLines, value);
+        }
+        finally
+        {
+            updatingLogScrollBar = false;
+        }
+    }
+
+    private int GetLogLineCount()
+    {
+        if (logBox == null || logBox.IsDisposed || !logBox.IsHandleCreated)
+        {
+            return 1;
+        }
+
+        return Math.Max(1, SendMessage(logBox.Handle, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32());
+    }
+
+    private int GetFirstVisibleLogLine()
+    {
+        if (logBox == null || logBox.IsDisposed || !logBox.IsHandleCreated)
+        {
+            return 0;
+        }
+
+        return Math.Max(0, SendMessage(logBox.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero).ToInt32());
+    }
+
+    private int GetVisibleLogLineCount()
+    {
+        if (logBox == null)
+        {
+            return 1;
+        }
+
+        int lineHeight = Math.Max(1, (int)Math.Ceiling(logBox.Font.GetHeight()));
+        return Math.Max(1, logBox.ClientSize.Height / lineHeight);
     }
 
     private void BrowseButton_Click(object sender, EventArgs e)
@@ -165,6 +1042,7 @@ internal sealed class UBDocGuiForm : Form
         stdoutBuffer.Length = 0;
         stderrBuffer.Length = 0;
         logBox.Clear();
+        UpdateLogScrollBar();
         AppendLog("변환 중입니다. 완료될 때까지 기다리세요.");
         SetInputsEnabled(false);
 
@@ -586,14 +1464,27 @@ internal sealed class UBDocGuiForm : Form
             return;
         }
         logBox.AppendText(message + Environment.NewLine);
+        logBox.SelectionStart = logBox.TextLength;
+        logBox.ScrollToCaret();
+        ScrollLogToLine(GetLogLineCount());
     }
 
     private void SetInputsEnabled(bool enabled)
     {
         runButton.Enabled = enabled;
         browseButton.Enabled = enabled;
-        urlBox.Enabled = enabled;
-        outputBox.Enabled = enabled;
+        urlBox.ReadOnly = !enabled;
+        outputBox.ReadOnly = !enabled;
+        urlBox.BackColor = enabled ? UiTheme.InputBack : UiTheme.DisabledBack;
+        outputBox.BackColor = enabled ? UiTheme.InputBack : UiTheme.DisabledBack;
+        if (urlInputPanel != null)
+        {
+            urlInputPanel.FillColor = enabled ? UiTheme.InputBack : UiTheme.DisabledBack;
+        }
+        if (outputInputPanel != null)
+        {
+            outputInputPanel.FillColor = enabled ? UiTheme.InputBack : UiTheme.DisabledBack;
+        }
         keepImagesBox.Enabled = enabled;
     }
 
@@ -897,14 +1788,46 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--self-test")
+        try
         {
+            if (args.Length > 0 && args[0] == "--self-test")
+            {
+                using (UBDocGuiForm form = new UBDocGuiForm())
+                {
+                }
+                return 0;
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new UBDocGuiForm());
             return 0;
         }
+        catch (Exception ex)
+        {
+            WriteStartupError(ex);
+            try
+            {
+                MessageBox.Show("프로그램을 시작할 수 없습니다.\n\n" + ex.Message, "TLS PDF Downloader", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch
+            {
+            }
+            return 1;
+        }
+    }
 
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new UBDocGuiForm());
-        return 0;
+    private static void WriteStartupError(Exception ex)
+    {
+        try
+        {
+            string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string logDir = Path.Combine(appDir, "Logs");
+            Directory.CreateDirectory(logDir);
+            File.WriteAllText(Path.Combine(logDir, "startup_error.log"), ex.ToString(), new UTF8Encoding(true));
+        }
+        catch
+        {
+        }
     }
 }
