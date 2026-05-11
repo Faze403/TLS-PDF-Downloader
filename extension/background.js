@@ -48,6 +48,7 @@ async function startConversion(message, sender) {
     url: converterUrl,
     active: false,
   });
+  closeSourceTab(job.sourceTabId);
 
   return {
     ok: true,
@@ -63,6 +64,16 @@ async function closeSenderTab(sender) {
 
   await chrome.tabs.remove(sender.tab.id);
   return { ok: true };
+}
+
+function closeSourceTab(tabId) {
+  if (!tabId) {
+    return;
+  }
+
+  chrome.tabs.remove(tabId).catch(() => {
+    // The source ubdoc tab may already be closed.
+  });
 }
 
 function createJobId() {
