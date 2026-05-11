@@ -7,10 +7,6 @@
   const WORKER_PATH = "/local/ubdoc/worker.php";
   const QUERY_KEYS = ["id", "tp", "pg", "item", "fid"];
 
-  let currentJobId = null;
-  let runButton = null;
-  let statusBox = null;
-
   if (document.getElementById(PANEL_ID)) {
     return;
   }
@@ -20,32 +16,34 @@
   }
 
   installPanel();
-  chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 
   function installPanel() {
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
 
-    runButton = document.createElement("button");
-    runButton.id = BUTTON_ID;
-    runButton.type = "button";
-    runButton.textContent = "PDF 저장";
+    const button = document.createElement("button");
+    button.id = BUTTON_ID;
+    button.type = "button";
+    button.textContent = "PDF 저장";
 
-    statusBox = document.createElement("div");
-    statusBox.id = STATUS_ID;
-    statusBox.setAttribute("role", "status");
-    statusBox.textContent = "";
+    const status = document.createElement("div");
+    status.id = STATUS_ID;
+    status.setAttribute("role", "status");
+    status.textContent = "";
 
-    panel.appendChild(runButton);
-    panel.appendChild(statusBox);
+    panel.appendChild(button);
+    panel.appendChild(status);
     (document.body || document.documentElement).appendChild(panel);
 
-    runButton.addEventListener("click", handleClick);
+    button.addEventListener("click", () => {
+      handleClick(button, status);
+    });
   }
 
-  async function handleClick() {
-    runButton.disabled = true;
-    setStatus("문서 확인 중", "");
+  async function handleClick(button, status) {
+    button.disabled = true;
+    status.dataset.kind = "";
+    status.textContent = "문서 확인 중";
 
     try {
       const state = await checkState(window.location.href);
@@ -56,44 +54,16 @@
       });
 
       if (!response || !response.ok) {
-        throw new Error(response && response.error ? response.error : "PDF 저장을 시작할 수 없습니다.");
+        throw new Error(response && response.error ? response.error : "변환 탭을 열 수 없습니다.");
       }
 
-      currentJobId = response.jobId;
-      setStatus("다운로드 준비 중", "");
+      status.dataset.kind = "done";
+      status.textContent = "변환 탭을 열었습니다";
     } catch (error) {
-      currentJobId = null;
-      setStatus(formatError(error), "error");
-      runButton.disabled = false;
+      status.dataset.kind = "error";
+      status.textContent = error && error.message ? error.message : String(error);
+      button.disabled = false;
     }
-  }
-
-  function handleRuntimeMessage(message) {
-    if (!message || !currentJobId || message.jobId !== currentJobId) {
-      return false;
-    }
-
-    if (message.type === "CONVERSION_PROGRESS") {
-      const progress = formatProgress(message.current, message.total);
-      setStatus((message.status || "처리 중") + progress, "");
-      return false;
-    }
-
-    if (message.type === "CONVERSION_COMPLETE") {
-      setStatus("다운로드가 시작되었습니다", "done");
-      currentJobId = null;
-      runButton.disabled = false;
-      return false;
-    }
-
-    if (message.type === "CONVERSION_ERROR") {
-      setStatus(message.error || "PDF 저장에 실패했습니다.", "error");
-      currentJobId = null;
-      runButton.disabled = false;
-      return false;
-    }
-
-    return false;
   }
 
   async function checkState(viewerUrl) {
@@ -137,21 +107,5 @@
     }
 
     return state;
-  }
-
-  function setStatus(text, kind) {
-    statusBox.dataset.kind = kind || "";
-    statusBox.textContent = text;
-  }
-
-  function formatProgress(current, total) {
-    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
-      return "";
-    }
-    return " (" + current + "/" + total + ")";
-  }
-
-  function formatError(error) {
-    return error && error.message ? error.message : String(error);
   }
 })();
