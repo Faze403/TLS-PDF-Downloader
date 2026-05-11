@@ -1,50 +1,33 @@
 (function () {
   "use strict";
 
-  const JOB_KEY_PREFIX = "job:";
   const DOWNLOAD_DIR = "TLS PDF Downloader";
   const JPEG_QUALITY = 0.95;
+  const OBJECT_URL_TTL_MS = 60000;
 
-  const summaryEl = document.getElementById("summary");
-  const statusEl = document.getElementById("status");
-  const countEl = document.getElementById("count");
-  const progressEl = document.getElementById("progress");
-  const logEl = document.getElementById("log");
-  const closeButton = document.getElementById("closeButton");
-
-  closeButton.addEventListener("click", () => window.close());
-  document.addEventListener("DOMContentLoaded", run);
-
-  async function run() {
-    try {
-      if (!window.PDFLib || !window.PDFLib.PDFDocument) {
-        throw new Error("pdf-lib을 불러올 수 없습니다.");
-      }
-
-      const jobId = getJobId();
-      if (!jobId) {
-        throw new Error("변환 작업 정보를 찾을 수 없습니다.");
-      }
-
-      const jobKey = JOB_KEY_PREFIX + jobId;
-      const store = getJobStore();
-      const data = await store.get(jobKey);
-      const job = data[jobKey];
-      if (!job || !job.state) {
-        throw new Error("변환 작업이 만료되었거나 존재하지 않습니다.");
-      }
-
-      await convertJob(job);
-      await store.remove(jobKey);
-    } catch (error) {
-      setStatus("실패", 0, 1);
-      appendLog("error: " + formatError(error));
-      summaryEl.textContent = formatError(error);
-      closeButton.hidden = false;
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || message.target !== "offscreen" || message.type !== "CONVERT_JOB") {
+      return false;
     }
-  }
+
+    convertJob(message.job)
+      .catch((error) => {
+        notifyError(message.job && message.job.jobId, formatError(error));
+      });
+
+    sendResponse({ ok: true });
+    return false;
+  });
 
   async function convertJob(job) {
+    if (!window.PDFLib || !window.PDFLib.PDFDocument) {
+      throw new Error("pdf-lib을 불러올 수 없습니다.");
+    }
+    if (!job || !job.jobId || !job.state) {
+      throw new Error("변환 작업 정보를 찾을 수 없습니다.");
+    }
+
+    notifyProgress(job, "문서 정보 읽는 중", 0, 1);
     const pageSet = await loadPageSet(job.state);
     const outputName = safePdfName(
       getString(job.state, "file_realname") ||
@@ -52,11 +35,7 @@
       "ubdoc.pdf"
     );
 
-    summaryEl.textContent = outputName + " / " + pageSet.pages.length + "페이지";
-    progressEl.max = pageSet.pages.length + 1;
-    setStatus("이미지 다운로드 중", 0, progressEl.max);
-    appendLog("found " + pageSet.pages.length + " pages");
-
+    notifyProgress(job, "이미지 다운로드 중", 0, pageSet.pages.length, outputName);
     const pdfDoc = await window.PDFLib.PDFDocument.create();
 
     for (let index = 0; index < pageSet.pages.length; index += 1) {
@@ -64,9 +43,7 @@
       const imageUrl = new URL(page.pathHtml, pageSet.baseUrl).toString();
       const step = index + 1;
 
-      setStatus("이미지 다운로드 중", step, progressEl.max);
-      appendLog("download " + step + "/" + pageSet.pages.length + ": " + imageUrl);
-
+      notifyProgress(job, "이미지 다운로드 중", step, pageSet.pages.length, outputName);
       const imageBytes = await requestBytes(imageUrl, pageSet.baseUrl);
       const image = await convertImageToJpeg(imageBytes);
       const embedded = await pdfDoc.embedJpg(image.jpegBytes);
@@ -79,30 +56,21 @@
       });
     }
 
-    setStatus("PDF 생성 중", pageSet.pages.length, progressEl.max);
-    appendLog("building PDF");
+    notifyProgress(job, "PDF 생성 중", pageSet.pages.length, pageSet.pages.length, outputName);
     const pdfBytes = await pdfDoc.save();
-
     const blob = new Blob([pdfBytes], { type: "application/pdf" });
     const objectUrl = URL.createObjectURL(blob);
     const filename = DOWNLOAD_DIR + "/" + outputName;
 
-    try {
-      const downloadId = await chrome.downloads.download({
-        url: objectUrl,
-        filename,
-        conflictAction: "uniquify",
-        saveAs: false,
-      });
+    setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS);
 
-      setStatus("완료", progressEl.max, progressEl.max);
-      appendLog("saved PDF: " + filename);
-      appendLog("download id: " + downloadId);
-      summaryEl.textContent = "다운로드가 시작되었습니다: " + filename;
-      closeButton.hidden = false;
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    }
+    await chrome.runtime.sendMessage({
+      target: "background",
+      type: "OFFSCREEN_COMPLETE",
+      jobId: job.jobId,
+      url: objectUrl,
+      filename,
+    });
   }
 
   async function loadPageSet(state) {
@@ -121,7 +89,6 @@
       encodePathPart(fileId) + "/";
     const xmlUrl = baseUrl + encodePathPart(fileId) + ".xml";
 
-    appendLog("load XML: " + xmlUrl);
     const xmlBytes = await requestBytes(xmlUrl, null);
     const xmlText = new TextDecoder("utf-8").decode(xmlBytes);
     const documentXml = new DOMParser().parseFromString(xmlText, "application/xml");
@@ -161,7 +128,6 @@
     }
 
     const response = await fetch(url, request);
-
     if (!response.ok) {
       throw new Error("요청 실패: HTTP " + response.status + " / " + url);
     }
@@ -207,28 +173,36 @@
 
     const url = URL.createObjectURL(blob);
     try {
-      const image = await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error("이미지를 불러올 수 없습니다."));
-        img.src = url;
+      return await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("이미지를 불러올 수 없습니다."));
+        image.src = url;
       });
-
-      return image;
     } finally {
       URL.revokeObjectURL(url);
     }
   }
 
-  function getJobId() {
-    const hash = window.location.hash.startsWith("#")
-      ? window.location.hash.slice(1)
-      : window.location.hash;
-    return new URLSearchParams(hash).get("jobId");
+  function notifyProgress(job, status, current, total, filename) {
+    chrome.runtime.sendMessage({
+      target: "background",
+      type: "OFFSCREEN_PROGRESS",
+      jobId: job.jobId,
+      status,
+      current,
+      total,
+      filename,
+    });
   }
 
-  function getJobStore() {
-    return chrome.storage.session || chrome.storage.local;
+  function notifyError(jobId, error) {
+    chrome.runtime.sendMessage({
+      target: "background",
+      type: "OFFSCREEN_ERROR",
+      jobId,
+      error,
+    });
   }
 
   function getString(data, key) {
@@ -269,19 +243,6 @@
       safe += ".pdf";
     }
     return safe;
-  }
-
-  function setStatus(text, value, max) {
-    statusEl.textContent = text;
-    progressEl.value = value;
-    progressEl.max = max || 1;
-    countEl.textContent = value + " / " + progressEl.max;
-  }
-
-  function appendLog(text) {
-    const stamp = new Date().toLocaleTimeString("ko-KR", { hour12: false });
-    logEl.textContent += "[" + stamp + "] " + text + "\n";
-    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function formatError(error) {

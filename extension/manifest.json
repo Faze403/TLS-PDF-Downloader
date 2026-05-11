@@ -5,6 +5,7 @@
   "description": "TLS/Coursemos ubdoc 문서 페이지를 PDF로 저장합니다.",
   "permissions": [
     "downloads",
+    "offscreen",
     "storage"
   ],
   "host_permissions": [
