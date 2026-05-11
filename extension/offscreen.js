@@ -3,6 +3,7 @@
 
   const DOWNLOAD_DIR = "TLS PDF Downloader";
   const JPEG_QUALITY = 0.95;
+  const IMAGE_DOWNLOAD_CONCURRENCY = 4;
   const OBJECT_URL_TTL_MS = 60000;
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -36,16 +37,12 @@
     );
 
     notifyProgress(job, "이미지 다운로드 중", 0, pageSet.pages.length, outputName);
+    const images = await downloadImages(job, pageSet, outputName);
+
+    notifyProgress(job, "PDF 생성 중", 0, pageSet.pages.length, outputName);
     const pdfDoc = await window.PDFLib.PDFDocument.create();
-
     for (let index = 0; index < pageSet.pages.length; index += 1) {
-      const page = pageSet.pages[index];
-      const imageUrl = new URL(page.pathHtml, pageSet.baseUrl).toString();
-      const step = index + 1;
-
-      notifyProgress(job, "이미지 다운로드 중", step, pageSet.pages.length, outputName);
-      const imageBytes = await requestBytes(imageUrl, pageSet.baseUrl);
-      const image = await convertImageToJpeg(imageBytes);
+      const image = images[index];
       const embedded = await pdfDoc.embedJpg(image.jpegBytes);
       const pdfPage = pdfDoc.addPage([image.width, image.height]);
       pdfPage.drawImage(embedded, {
@@ -54,6 +51,7 @@
         width: image.width,
         height: image.height,
       });
+      notifyProgress(job, "PDF 생성 중", index + 1, pageSet.pages.length, outputName);
     }
 
     notifyProgress(job, "PDF 생성 중", pageSet.pages.length, pageSet.pages.length, outputName);
@@ -71,6 +69,31 @@
       url: objectUrl,
       filename,
     });
+  }
+
+  async function downloadImages(job, pageSet, outputName) {
+    const images = new Array(pageSet.pages.length);
+    let nextIndex = 0;
+    let completed = 0;
+    const workerCount = Math.min(IMAGE_DOWNLOAD_CONCURRENCY, pageSet.pages.length);
+
+    async function worker() {
+      while (nextIndex < pageSet.pages.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+
+        const page = pageSet.pages[index];
+        const imageUrl = new URL(page.pathHtml, pageSet.baseUrl).toString();
+        const imageBytes = await requestBytes(imageUrl, pageSet.baseUrl);
+        images[index] = await convertImageToJpeg(imageBytes);
+
+        completed += 1;
+        notifyProgress(job, "이미지 다운로드 중", completed, pageSet.pages.length, outputName);
+      }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return images;
   }
 
   async function loadPageSet(state) {
