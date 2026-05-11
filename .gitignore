@@ -1,4 +1,8 @@
-UBDoc_GUI.exe
-Logs
-PDF
+# Extension package artifacts
+extension.zip
+*.crx
+
+# Local generated output
+Logs/
+PDF/
 settings.ini
